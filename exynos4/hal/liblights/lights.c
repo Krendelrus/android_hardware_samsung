@@ -35,9 +35,20 @@
 
 /******************************************************************************/
 
+/* LED NOTIFICATIONS BACKLIGHT */
+#define ENABLE_BL		1
+#define DISABLE_BL		0
+#define DISABLE_BL_CM		2
+
+#define DISABLE_KEYLIGHT 2
+#define DISABLE_KEYLIGHT_CM 0
+
 static pthread_once_t g_init = PTHREAD_ONCE_INIT;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_enable_touchlight = -1;
+int notification_file;
+int disable_bl;
+int disable_keylight;
 
 char const*const PANEL_FILE
         = "/sys/class/backlight/panel/brightness";
@@ -47,6 +58,12 @@ char const*const BUTTON_POWER
 
 char const*const BUTTON_FILE
         = "/sys/class/sec/sec_touchkey/brightness";
+
+char const *const NOTIFICATION_FILE_BLN
+	= "/sys/class/misc/backlightnotification/notification_led";
+
+char const *const NOTIFICATION_FILE_CM
+	= "/sys/class/misc/notification/led";
 
 void init_globals(void)
 {
@@ -68,6 +85,22 @@ load_settings()
             g_enable_touchlight = 0;
 
         fclose(fp);
+    }
+}
+
+void
+load_module_type()
+{
+    FILE* fp = fopen(NOTIFICATION_FILE_BLN, "r");
+    if (fp) {
+	notification_file = NOTIFICATION_FILE_BLN;
+	disable_bl = DISABLE_BL;
+	disable_keylight = DISABLE_KEYLIGHT;
+	fclose(fp);
+    } else {
+        notification_file = NOTIFICATION_FILE_CM;
+	disable_bl = DISABLE_BL_CM;
+	disable_keylight = DISABLE_KEYLIGHT_CM;
     }
 }
 
@@ -118,7 +151,7 @@ set_light_backlight(struct light_device_t* dev,
 
     pthread_mutex_lock(&g_lock);
     err = write_int(PANEL_FILE, brightness);
-
+	if(notification_file==NOTIFICATION_FILE_CM)
     if (g_enable_touchlight == -1 || g_enable_touchlight > 0)
         err = write_int(BUTTON_FILE, brightness > 0 ? 1 : 0);
 
@@ -143,7 +176,7 @@ set_light_buttons(struct light_device_t* dev,
 
     pthread_mutex_lock(&g_lock);
     LOGD("set_light_button on=%d\n", on ? 1 : 0);
-    err = write_int(BUTTON_FILE, on ? 1:0);
+    err = write_int(BUTTON_FILE, on ? 1:disable_keylight);
     pthread_mutex_unlock(&g_lock);
 
     return err;
@@ -158,8 +191,26 @@ set_light_battery(struct light_device_t* dev,
 
 static int
 set_light_notification(struct light_device_t* dev,
-        struct light_state_t const* state)
+	struct light_state_t const* state)
 {
+    load_module_type();
+
+    int err = 0;
+    int brightness = rgb_to_brightness(state);
+        
+    if (brightness+state->color == 0 || brightness > 100 ) {
+    	pthread_mutex_lock(&g_lock);
+
+    	if (state->color & 0x00ffffff) {
+    		LOGV("[LED Notify] set_light_notifications - ENABLE_BL\n");
+            	err = write_int (notification_file, ENABLE_BL);
+    	} else {
+    		LOGV("[LED Notify] set_light_notifications - DISABLE_BL\n");
+    		err = write_int (notification_file, disable_bl);
+    	}
+        pthread_mutex_unlock(&g_lock);
+    }
+
     return 0;
 }
 
@@ -235,6 +286,7 @@ const struct hw_module_t HAL_MODULE_INFO_SYM = {
     .version_minor = 0,
     .id = LIGHTS_HARDWARE_MODULE_ID,
     .name = "Samsung Exynos4210 Lights Module",
-    .author = "The CyanogenMod Project",
+    .author = "The CyanogenMod Project, Fluxi",
     .methods = &lights_module_methods,
 };
+
